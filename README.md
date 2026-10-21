@@ -148,15 +148,16 @@ installs `fastmcp-tasks`). It implements the extension for protocol revision
 **2026-07-28** with one registration and a decorator change:
 
 - `TasksExtension()` is registered once on the server;
-- the waiting tools are async and declared with `@mcp.tool(task=True)`, which
-  maps to execution mode `optional`: task-capable clients get a background
-  task, clients without the extension run the same function synchronously;
-  the sync path must cap its wait and return a quick "not your turn yet"
-  state so a legacy client never holds the connection;
+- the waiting tools are async and declared with
+  `@mcp.tool(task=TaskConfig(mode="optional", poll_interval=2s))`: task-capable
+  clients get a background task, clients without the extension run the same
+  function synchronously; the sync path caps its wait (no wait after a move,
+  10 s for `wait_for_turn`) and returns a quick "not your turn yet" state so a
+  legacy client never holds the connection;
 - `Progress.set_message(...)` inside a task feeds the task's status message
-  ("waiting for the human's move, move 7");
-- the suggested poll interval is set per tool via
-  `TaskConfig(mode="optional", poll_interval=...)`.
+  ("waiting for the human's move, move 7") through a thread-safe bridge;
+- cancellation of a task sets a cooperative stop flag: the wait unwinds at its
+  next slice boundary and the game and the UI window are untouched.
 
 By contrast, the official Python SDK v2 (`mcp` 2.x, `MCPServer`) supports the
 2026-07-28 revision and its extension framework (SEP-2133) but does **not**
@@ -168,7 +169,7 @@ local game (pending tasks are lost if the server restarts); set
 `FASTMCP_DOCKET_URL` to a Redis/Valkey URL if waiting tasks must survive a
 restart.
 
-## MCP Tool Surface (planned v1)
+## MCP Tool Surface (v1)
 
 | Tool | Parameters | Task-augmented | Purpose |
 | --- | --- | --- | --- |
@@ -364,18 +365,22 @@ waiting tools to stay non-blocking; otherwise the synchronous fallback applies.
 gomoku-tool/
 ├── README.md
 ├── pyproject.toml
-├── architecture/              # design documents (to be added)
+├── design/1/design.md         # design-first document of this implementation
+├── architecture/              # long-lived architecture notes (reserved)
 ├── src/
 │   └── gomoku_tool/
 │       ├── __init__.py
 │       ├── main.py            # entry point: FastMCP assembly + registrations
-│       ├── config.py          # env resolution: engine, redis, UI paths (planned)
-│       ├── client/            # gomoku-engine REST client (planned)
-│       ├── events/            # Redis subscription & turn waiting (planned)
-│       ├── models/            # DTOs mirroring engine payloads (planned)
-│       ├── tools/             # MCP tool definitions (planned)
-│       └── ui/                # gomoku-ui process launcher (planned)
-└── tests/                     # unit, integration & end-to-end tests
+│       ├── config.py          # env resolution: engine, redis, UI paths
+│       ├── business/          # use cases, sessions, turn waiter, rendering
+│       ├── ports/             # Protocol interfaces implemented by adapters
+│       ├── client/            # gomoku-engine REST client (httpx)
+│       ├── events/            # Redis move-event subscription (redis-py)
+│       ├── models/            # value objects mirroring engine payloads
+│       ├── errors/            # expected, user-facing failures
+│       ├── tools/             # MCP tools, Progress bridge, server lifespan
+│       └── ui/                # gomoku-ui process launcher (subprocess)
+└── tests/                     # business-layer tests with in-memory fakes
 ```
 
 ## Design Principles
@@ -396,9 +401,10 @@ gomoku-tool/
 ## Development
 
 - Install with dev extras: `pip install -e ".[dev]"`
-- Run tests: `python -m pytest`
+- Run tests: `python -m pytest` (business layer only; the adapters are thin
+  translators and are exercised against the real engine and UI)
 - Implementation follows a design-first, test-driven workflow; design documents
-  live in `architecture/`.
+  live in `design/` (this implementation: `design/1/design.md`).
 
 ## Assumptions
 
@@ -412,11 +418,12 @@ gomoku-tool/
 ## Status / Roadmap
 
 - [x] Project scaffold (layout, packaging, README)
-- [ ] Engine REST client + models matching the nested wire shape
-- [ ] Board renderer with 1-based coordinates
-- [ ] Turn waiter: Redis pub/sub with polling fallback and gap repair
-- [ ] gomoku-ui launcher with configurable paths
-- [ ] Tasks wiring: `TasksExtension()`, `@mcp.tool(task=True)` on the waiting
+- [x] Engine REST client + models matching the nested wire shape
+- [x] Board renderer with 1-based coordinates
+- [x] Turn waiter: Redis pub/sub with polling fallback and gap repair
+- [x] gomoku-ui launcher with configurable paths
+- [x] Tasks wiring: `TasksExtension()`, optional `TaskConfig` on the waiting
       tools, progress status messages, poll interval
-- [ ] MCP tool registration in `main.py`
-- [ ] Tests (unit + integration against a running engine and UI)
+- [x] MCP tool registration in `main.py`
+- [x] Business-layer test suite with in-memory fakes (63 tests)
+- [ ] Manual end-to-end play with a real human in the real gomoku-ui window

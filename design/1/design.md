@@ -16,6 +16,8 @@ Goals:
 - Open the gomoku-ui window for the human when a game starts.
 - Survive a missing/failing Redis by polling the engine snapshot.
 - Expose the long waits as MCP Tasks (`io.modelcontextprotocol/tasks`).
+- Run as a long-lived **streamable HTTP** service that clients reach by URL;
+  the stdio transport stays available for spawn-only clients.
 
 Hard constraints:
 
@@ -35,7 +37,7 @@ hide cycles):
 
 ```text
 MCP client
-    │  stdio: tools/call · tasks/get · tasks/cancel
+    │  streamable HTTP: tools/call · tasks/get · tasks/cancel
     ▼
 tools/            MCP adapter: FastMCP registration, task config, Progress,
     │             argument defaults, ToolError mapping
@@ -67,7 +69,7 @@ main.py                         composition root (entry script)
 
 | Class | File | Responsibility |
 | --- | --- | --- |
-| `ServerConfig` | `config.py` | Resolve engine URL, Redis URL, UI dir and UI interpreter from env with documented defaults; derive the UI script path |
+| `ServerConfig` | `config.py` | Resolve engine URL, Redis URL, UI dir, UI interpreter, transport, bind host and port from env with documented defaults; derive the UI script path |
 | `Side` | `models/side.py` | Engine side codes (`1` black, `2` white) with parsing, opposite, label and board symbol |
 | `Winner` | `models/winner.py` | Engine outcome codes (`1` black, `2` white, `3` tie, `4` running) and their human-readable labels |
 | `Move` | `models/move.py` | One played move: 1-based row/col + player side |

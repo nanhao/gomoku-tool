@@ -26,7 +26,7 @@ No game rule, no board state and no persistence is implemented here.
 +----------------+
 |   MCP client   |   (LLM agent)
 +--------+-------+
-         |  MCP (stdio): tools/call · tasks/get · tasks/cancel
+         |  MCP (streamable HTTP): tools/call · tasks/get · tasks/cancel
          v
 +----------------------+     HTTP REST      +------------------+
 |     gomoku-tool      | ------------------> |  gomoku-engine   | ---> gomoku-core
@@ -43,7 +43,8 @@ No game rule, no board state and no persistence is implemented here.
 ```
 
 - **LLM side** — an MCP-capable client (IDE agent, desktop chat app, ...) talks
-  to this server over stdio.
+  to this server over streamable HTTP, at `http://127.0.0.1:8765/mcp` by
+  default.
 - **Human side** — plays their side of the same game in the gomoku-ui window
   that `start_game` opens.
 - **gomoku-tool** — a protocol adapter plus a convenience layer: engine REST
@@ -287,7 +288,7 @@ refetching the snapshot, which is authoritative.
   `<GOMOKU_UI_DIR>\.venv\Scripts\python.exe`. The UI package must be installed
   in that venv (`pip install -e .` in the UI repo).
 - The window opens on the desktop of the machine running this MCP server, so
-  run the server locally (stdio), not on a headless host.
+  run the server on the machine where the human sits, not on a headless host.
 - The UI enforces the human's side locally, loads the authoritative snapshot
   and follows events, so it tolerates being opened while it is the LLM's turn.
 - A UI launch failure is **not fatal**: the game still exists, and the tool
@@ -323,10 +324,11 @@ pip install -e ".[dev]"
 
 ## Running
 
-`gomoku-tool` is a **stdio** MCP server: it has no URL and no browser UI. An
-MCP client spawns it and exchanges JSON-RPC over stdin/stdout. If you start it
-by hand it prints nothing and looks hung — that is expected: it is waiting for
-a client handshake on stdin.
+`gomoku-tool` is a long-running **HTTP** MCP service. Start it once in its own
+terminal and leave it running; an MCP client connects to
+`http://127.0.0.1:8765/mcp` with streamable HTTP. It binds loopback only unless
+`GOMOKU_HOST` says otherwise. (`GOMOKU_TRANSPORT=stdio` remains available for
+clients that can only spawn servers.)
 
 ### 1. Start the dependencies first
 
@@ -340,34 +342,7 @@ A missing dependency is not fatal: the server still starts, and tool calls
 then fail with a `ToolError` (engine unreachable) or come back with a note
 holding the exact command to open the window manually (bad `GOMOKU_UI_DIR`).
 
-### 2. Register it in your MCP client
-
-Stdio entry for an `mcpServers`-style config (Claude Desktop, Cursor, VS Code,
-...). The client owns the process, so environment overrides go here:
-
-```json
-{
-  "mcpServers": {
-    "gomoku": {
-      "command": "D:\\projects\\gomoku-tool\\.venv\\Scripts\\python.exe",
-      "args": ["-m", "gomoku_tool.main"],
-      "env": {
-        "GOMOKU_ENGINE_URL": "http://127.0.0.1:8000",
-        "REDIS_URL": "redis://localhost:6379/0",
-        "GOMOKU_UI_DIR": "D:\\projects\\gomoku-ui"
-      }
-    }
-  }
-}
-```
-
-If the package is installed with its console script on `PATH`, `"command":
-"gomoku-tool"` with no `args` is equivalent.
-
-The client must support the `io.modelcontextprotocol/tasks` extension for the
-waiting tools to stay non-blocking; otherwise the synchronous fallback applies.
-
-### 3. Smoke-test without a client
+### 2. Start the server
 
 ```powershell
 cd D:\projects\gomoku-tool
@@ -375,10 +350,47 @@ cd D:\projects\gomoku-tool
 python -m gomoku_tool.main   # or, after installation: gomoku-tool
 ```
 
-Expected: the FastMCP banner on stderr, then silence — the process is waiting
-for a client handshake. Stop it with Ctrl+C. The banner never touches stdout,
-which is reserved for JSON-RPC. A traceback at this point is an import or
-dependency problem, not a client problem.
+Expected: the FastMCP banner, `Starting MCP server 'gomoku-tool' with transport
+'http' on http://127.0.0.1:8765/mcp`, and uvicorn's `Application startup
+complete`. Leave the terminal open; Ctrl+C stops the server. Engine, Redis and
+UI settings are read from the environment at startup:
+
+```powershell
+$env:GOMOKU_ENGINE_URL = "http://127.0.0.1:8000"
+$env:GOMOKU_UI_DIR = "D:\projects\gomoku-ui"
+python -m gomoku_tool.main
+```
+
+### 3. Point your MCP client at it
+
+Streamable HTTP entry for an `mcpServers`-style config (Claude Desktop, Cursor,
+VS Code, ...):
+
+```json
+{
+  "mcpServers": {
+    "gomoku": {
+      "url": "http://127.0.0.1:8765/mcp"
+    }
+  }
+}
+```
+
+The client must support the `io.modelcontextprotocol/tasks` extension for the
+waiting tools to stay non-blocking; otherwise the synchronous fallback applies.
+A client that can only spawn stdio servers still works: start the server with
+`GOMOKU_TRANSPORT=stdio` and give the client the command form instead
+(`"command": "...\\python.exe", "args": ["-m", "gomoku_tool.main"]`).
+
+### 4. Smoke-test while it runs
+
+```powershell
+D:\projects\gomoku-tool\.venv\Scripts\fastmcp.exe call `
+    http://127.0.0.1:8765/mcp get_game_state game_id=missing
+```
+
+The call is expected to fail with the engine's 404 for that id: it proves the
+transport, the tool registration and the engine connection in one shot.
 
 ## Configuration
 
@@ -388,6 +400,9 @@ dependency problem, not a client problem.
 | `REDIS_URL` | `redis://localhost:6379/0` | Redis instance for move-event subscription |
 | `GOMOKU_UI_DIR` | `D:\projects\gomoku-ui` | Gomoku-ui checkout; the launcher derives the script and venv from it |
 | `GOMOKU_UI_PYTHON` | `<GOMOKU_UI_DIR>\.venv\Scripts\python.exe` | Interpreter used to launch the gomoku-ui window |
+| `GOMOKU_TRANSPORT` | `http` | Transport: `http`/`streamable-http`, `sse` or `stdio` |
+| `GOMOKU_HOST` | `127.0.0.1` | Bind interface for HTTP transports; `0.0.0.0` exposes it on the LAN |
+| `GOMOKU_PORT` | `8765` | Bind port; `8000` belongs to gomoku-engine |
 
 ## Directory Layout
 
@@ -455,5 +470,7 @@ gomoku-tool/
 - [x] Tasks wiring: `TasksExtension()`, optional `TaskConfig` on the waiting
       tools, progress status messages, poll interval
 - [x] MCP tool registration in `main.py`
-- [x] Business-layer test suite with in-memory fakes (63 tests)
+- [x] Streamable HTTP transport on `127.0.0.1:8765` by default; stdio opt-in
+      through `GOMOKU_TRANSPORT`
+- [x] Business-layer test suite with in-memory fakes (68 tests)
 - [ ] Manual end-to-end play with a real human in the real gomoku-ui window

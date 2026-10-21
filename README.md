@@ -321,24 +321,29 @@ python -m venv .venv
 pip install -e ".[dev]"
 ```
 
-## Configuration
+## Running
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `GOMOKU_ENGINE_URL` | `http://127.0.0.1:8000` | Base URL of the gomoku-engine REST API |
-| `REDIS_URL` | `redis://localhost:6379/0` | Redis instance for move-event subscription |
-| `GOMOKU_UI_DIR` | `D:\projects\gomoku-ui` | Gomoku-ui checkout; the launcher derives the script and venv from it |
-| `GOMOKU_UI_PYTHON` | `<GOMOKU_UI_DIR>\.venv\Scripts\python.exe` | Interpreter used to launch the gomoku-ui window |
+`gomoku-tool` is a **stdio** MCP server: it has no URL and no browser UI. An
+MCP client spawns it and exchanges JSON-RPC over stdin/stdout. If you start it
+by hand it prints nothing and looks hung — that is expected: it is waiting for
+a client handshake on stdin.
 
-Run the server directly (stdio transport):
+### 1. Start the dependencies first
 
-```powershell
-python -m gomoku_tool.main
-# or, after installation
-gomoku-tool
-```
+The server does not start them for you:
 
-Register it in an MCP client (example stdio config):
+- **gomoku-engine** with its Redis — `.\start.ps1` in that repo (REST on
+  `:8000`, move events on Redis);
+- **gomoku-ui** installed in its own venv (step 2 of *Setup* above).
+
+A missing dependency is not fatal: the server still starts, and tool calls
+then fail with a `ToolError` (engine unreachable) or come back with a note
+holding the exact command to open the window manually (bad `GOMOKU_UI_DIR`).
+
+### 2. Register it in your MCP client
+
+Stdio entry for an `mcpServers`-style config (Claude Desktop, Cursor, VS Code,
+...). The client owns the process, so environment overrides go here:
 
 ```json
 {
@@ -356,8 +361,33 @@ Register it in an MCP client (example stdio config):
 }
 ```
 
+If the package is installed with its console script on `PATH`, `"command":
+"gomoku-tool"` with no `args` is equivalent.
+
 The client must support the `io.modelcontextprotocol/tasks` extension for the
 waiting tools to stay non-blocking; otherwise the synchronous fallback applies.
+
+### 3. Smoke-test without a client
+
+```powershell
+cd D:\projects\gomoku-tool
+.\.venv\Scripts\Activate.ps1
+python -m gomoku_tool.main   # or, after installation: gomoku-tool
+```
+
+Expected: the FastMCP banner on stderr, then silence — the process is waiting
+for a client handshake. Stop it with Ctrl+C. The banner never touches stdout,
+which is reserved for JSON-RPC. A traceback at this point is an import or
+dependency problem, not a client problem.
+
+## Configuration
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `GOMOKU_ENGINE_URL` | `http://127.0.0.1:8000` | Base URL of the gomoku-engine REST API |
+| `REDIS_URL` | `redis://localhost:6379/0` | Redis instance for move-event subscription |
+| `GOMOKU_UI_DIR` | `D:\projects\gomoku-ui` | Gomoku-ui checkout; the launcher derives the script and venv from it |
+| `GOMOKU_UI_PYTHON` | `<GOMOKU_UI_DIR>\.venv\Scripts\python.exe` | Interpreter used to launch the gomoku-ui window |
 
 ## Directory Layout
 

@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gomoku-tool"
+version = "0.1.0"
+description = "MCP server that lets an LLM play gomoku against a human via gomoku-engine, launching gomoku-ui for the human and using the MCP Tasks extension for turn-sized waits"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    # FastMCP 4: high-level MCP server framework built on SDK v2, serving the
+    # sessionless 2026-07-28 protocol and legacy clients per connection. The
+    # [tasks] extra installs fastmcp-tasks, which implements the
+    # io.modelcontextprotocol/tasks extension (SEP-2663) used by the
+    # turn-waiting tools.
+    "fastmcp[tasks]>=4,<5",
+    # HTTP client for the gomoku-engine REST API.
+    "httpx>=0.27",
+    # Move-event subscription on the same Redis instance the engine publishes
+    # to. Same pin as gomoku-engine: redis-py 6+ requires Redis >= 6.0, while
+    # Redis-on-Windows ships 3.0.x and only speaks RESP2.
+    "redis>=5.0,<6",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[project.scripts]
+gomoku-tool = "gomoku_tool.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

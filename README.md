@@ -26,7 +26,7 @@ No game rule, no board state and no persistence is implemented here.
 +----------------+
 |   MCP client   |   (LLM agent)
 +--------+-------+
-         |  MCP (stdio): tools/call · tasks/get · tasks/cancel
+         |  MCP (streamable HTTP): tools/call · tasks/get · tasks/cancel
          v
 +----------------------+     HTTP REST      +------------------+
 |     gomoku-tool      | ------------------> |  gomoku-engine   | ---> gomoku-core
@@ -43,7 +43,8 @@ No game rule, no board state and no persistence is implemented here.
 ```
 
 - **LLM side** — an MCP-capable client (IDE agent, desktop chat app, ...) talks
-  to this server over stdio.
+  to this server over streamable HTTP, at `http://127.0.0.1:8765/mcp` by
+  default.
 - **Human side** — plays their side of the same game in the gomoku-ui window
   that `start_game` opens.
 - **gomoku-tool** — a protocol adapter plus a convenience layer: engine REST
@@ -148,15 +149,16 @@ installs `fastmcp-tasks`). It implements the extension for protocol revision
 **2026-07-28** with one registration and a decorator change:
 
 - `TasksExtension()` is registered once on the server;
-- the waiting tools are async and declared with `@mcp.tool(task=True)`, which
-  maps to execution mode `optional`: task-capable clients get a background
-  task, clients without the extension run the same function synchronously;
-  the sync path must cap its wait and return a quick "not your turn yet"
-  state so a legacy client never holds the connection;
+- the waiting tools are async and declared with
+  `@mcp.tool(task=TaskConfig(mode="optional", poll_interval=2s))`: task-capable
+  clients get a background task, clients without the extension run the same
+  function synchronously; the sync path caps its wait (no wait after a move,
+  10 s for `wait_for_turn`) and returns a quick "not your turn yet" state so a
+  legacy client never holds the connection;
 - `Progress.set_message(...)` inside a task feeds the task's status message
-  ("waiting for the human's move, move 7");
-- the suggested poll interval is set per tool via
-  `TaskConfig(mode="optional", poll_interval=...)`.
+  ("waiting for the human's move, move 7") through a thread-safe bridge;
+- cancellation of a task sets a cooperative stop flag: the wait unwinds at its
+  next slice boundary and the game and the UI window are untouched.
 
 By contrast, the official Python SDK v2 (`mcp` 2.x, `MCPServer`) supports the
 2026-07-28 revision and its extension framework (SEP-2133) but does **not**
@@ -168,7 +170,7 @@ local game (pending tasks are lost if the server restarts); set
 `FASTMCP_DOCKET_URL` to a Redis/Valkey URL if waiting tasks must survive a
 restart.
 
-## MCP Tool Surface (planned v1)
+## MCP Tool Surface (v1)
 
 | Tool | Parameters | Task-augmented | Purpose |
 | --- | --- | --- | --- |
@@ -286,7 +288,7 @@ refetching the snapshot, which is authoritative.
   `<GOMOKU_UI_DIR>\.venv\Scripts\python.exe`. The UI package must be installed
   in that venv (`pip install -e .` in the UI repo).
 - The window opens on the desktop of the machine running this MCP server, so
-  run the server locally (stdio), not on a headless host.
+  run the server on the machine where the human sits, not on a headless host.
 - The UI enforces the human's side locally, loads the authoritative snapshot
   and follows events, so it tolerates being opened while it is the LLM's turn.
 - A UI launch failure is **not fatal**: the game still exists, and the tool
@@ -320,6 +322,76 @@ python -m venv .venv
 pip install -e ".[dev]"
 ```
 
+## Running
+
+`gomoku-tool` is a long-running **HTTP** MCP service. Start it once in its own
+terminal and leave it running; an MCP client connects to
+`http://127.0.0.1:8765/mcp` with streamable HTTP. It binds loopback only unless
+`GOMOKU_HOST` says otherwise. (`GOMOKU_TRANSPORT=stdio` remains available for
+clients that can only spawn servers.)
+
+### 1. Start the dependencies first
+
+The server does not start them for you:
+
+- **gomoku-engine** with its Redis — `.\start.ps1` in that repo (REST on
+  `:8000`, move events on Redis);
+- **gomoku-ui** installed in its own venv (step 2 of *Setup* above).
+
+A missing dependency is not fatal: the server still starts, and tool calls
+then fail with a `ToolError` (engine unreachable) or come back with a note
+holding the exact command to open the window manually (bad `GOMOKU_UI_DIR`).
+
+### 2. Start the server
+
+```powershell
+cd D:\projects\gomoku-tool
+.\.venv\Scripts\Activate.ps1
+python -m gomoku_tool.main   # or, after installation: gomoku-tool
+```
+
+Expected: the FastMCP banner, `Starting MCP server 'gomoku-tool' with transport
+'http' on http://127.0.0.1:8765/mcp`, and uvicorn's `Application startup
+complete`. Leave the terminal open; Ctrl+C stops the server. Engine, Redis and
+UI settings are read from the environment at startup:
+
+```powershell
+$env:GOMOKU_ENGINE_URL = "http://127.0.0.1:8000"
+$env:GOMOKU_UI_DIR = "D:\projects\gomoku-ui"
+python -m gomoku_tool.main
+```
+
+### 3. Point your MCP client at it
+
+Streamable HTTP entry for an `mcpServers`-style config (Claude Desktop, Cursor,
+VS Code, ...):
+
+```json
+{
+  "mcpServers": {
+    "gomoku": {
+      "url": "http://127.0.0.1:8765/mcp"
+    }
+  }
+}
+```
+
+The client must support the `io.modelcontextprotocol/tasks` extension for the
+waiting tools to stay non-blocking; otherwise the synchronous fallback applies.
+A client that can only spawn stdio servers still works: start the server with
+`GOMOKU_TRANSPORT=stdio` and give the client the command form instead
+(`"command": "...\\python.exe", "args": ["-m", "gomoku_tool.main"]`).
+
+### 4. Smoke-test while it runs
+
+```powershell
+D:\projects\gomoku-tool\.venv\Scripts\fastmcp.exe call `
+    http://127.0.0.1:8765/mcp get_game_state game_id=missing
+```
+
+The call is expected to fail with the engine's 404 for that id: it proves the
+transport, the tool registration and the engine connection in one shot.
+
 ## Configuration
 
 | Variable | Default | Purpose |
@@ -328,35 +400,9 @@ pip install -e ".[dev]"
 | `REDIS_URL` | `redis://localhost:6379/0` | Redis instance for move-event subscription |
 | `GOMOKU_UI_DIR` | `D:\projects\gomoku-ui` | Gomoku-ui checkout; the launcher derives the script and venv from it |
 | `GOMOKU_UI_PYTHON` | `<GOMOKU_UI_DIR>\.venv\Scripts\python.exe` | Interpreter used to launch the gomoku-ui window |
-
-Run the server directly (stdio transport):
-
-```powershell
-python -m gomoku_tool.main
-# or, after installation
-gomoku-tool
-```
-
-Register it in an MCP client (example stdio config):
-
-```json
-{
-  "mcpServers": {
-    "gomoku": {
-      "command": "D:\\projects\\gomoku-tool\\.venv\\Scripts\\python.exe",
-      "args": ["-m", "gomoku_tool.main"],
-      "env": {
-        "GOMOKU_ENGINE_URL": "http://127.0.0.1:8000",
-        "REDIS_URL": "redis://localhost:6379/0",
-        "GOMOKU_UI_DIR": "D:\\projects\\gomoku-ui"
-      }
-    }
-  }
-}
-```
-
-The client must support the `io.modelcontextprotocol/tasks` extension for the
-waiting tools to stay non-blocking; otherwise the synchronous fallback applies.
+| `GOMOKU_TRANSPORT` | `http` | Transport: `http`/`streamable-http`, `sse` or `stdio` |
+| `GOMOKU_HOST` | `127.0.0.1` | Bind interface for HTTP transports; `0.0.0.0` exposes it on the LAN |
+| `GOMOKU_PORT` | `8765` | Bind port; `8000` belongs to gomoku-engine |
 
 ## Directory Layout
 
@@ -364,18 +410,22 @@ waiting tools to stay non-blocking; otherwise the synchronous fallback applies.
 gomoku-tool/
 ├── README.md
 ├── pyproject.toml
-├── architecture/              # design documents (to be added)
+├── design/1/design.md         # design-first document of this implementation
+├── architecture/              # long-lived architecture notes (reserved)
 ├── src/
 │   └── gomoku_tool/
 │       ├── __init__.py
 │       ├── main.py            # entry point: FastMCP assembly + registrations
-│       ├── config.py          # env resolution: engine, redis, UI paths (planned)
-│       ├── client/            # gomoku-engine REST client (planned)
-│       ├── events/            # Redis subscription & turn waiting (planned)
-│       ├── models/            # DTOs mirroring engine payloads (planned)
-│       ├── tools/             # MCP tool definitions (planned)
-│       └── ui/                # gomoku-ui process launcher (planned)
-└── tests/                     # unit, integration & end-to-end tests
+│       ├── config.py          # env resolution: engine, redis, UI paths
+│       ├── business/          # use cases, sessions, turn waiter, rendering
+│       ├── ports/             # Protocol interfaces implemented by adapters
+│       ├── client/            # gomoku-engine REST client (httpx)
+│       ├── events/            # Redis move-event subscription (redis-py)
+│       ├── models/            # value objects mirroring engine payloads
+│       ├── errors/            # expected, user-facing failures
+│       ├── tools/             # MCP tools, Progress bridge, server lifespan
+│       └── ui/                # gomoku-ui process launcher (subprocess)
+└── tests/                     # business-layer tests with in-memory fakes
 ```
 
 ## Design Principles
@@ -396,9 +446,10 @@ gomoku-tool/
 ## Development
 
 - Install with dev extras: `pip install -e ".[dev]"`
-- Run tests: `python -m pytest`
+- Run tests: `python -m pytest` (business layer only; the adapters are thin
+  translators and are exercised against the real engine and UI)
 - Implementation follows a design-first, test-driven workflow; design documents
-  live in `architecture/`.
+  live in `design/` (this implementation: `design/1/design.md`).
 
 ## Assumptions
 
@@ -412,11 +463,14 @@ gomoku-tool/
 ## Status / Roadmap
 
 - [x] Project scaffold (layout, packaging, README)
-- [ ] Engine REST client + models matching the nested wire shape
-- [ ] Board renderer with 1-based coordinates
-- [ ] Turn waiter: Redis pub/sub with polling fallback and gap repair
-- [ ] gomoku-ui launcher with configurable paths
-- [ ] Tasks wiring: `TasksExtension()`, `@mcp.tool(task=True)` on the waiting
+- [x] Engine REST client + models matching the nested wire shape
+- [x] Board renderer with 1-based coordinates
+- [x] Turn waiter: Redis pub/sub with polling fallback and gap repair
+- [x] gomoku-ui launcher with configurable paths
+- [x] Tasks wiring: `TasksExtension()`, optional `TaskConfig` on the waiting
       tools, progress status messages, poll interval
-- [ ] MCP tool registration in `main.py`
-- [ ] Tests (unit + integration against a running engine and UI)
+- [x] MCP tool registration in `main.py`
+- [x] Streamable HTTP transport on `127.0.0.1:8765` by default; stdio opt-in
+      through `GOMOKU_TRANSPORT`
+- [x] Business-layer test suite with in-memory fakes (68 tests)
+- [ ] Manual end-to-end play with a real human in the real gomoku-ui window

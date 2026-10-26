@@ -56,11 +56,15 @@ class TestServerConfig:
         assert config.ui_python == Path(r"C:\Python313\python.exe")
 
     def test_http_transport_is_the_default(self) -> None:
-        """The server is a long-running HTTP service unless told otherwise."""
+        """The server is a long-running HTTP service unless told otherwise.
+
+        It binds every interface so a client on the same network can reach
+        it; ``0.0.0.0`` is a bind address, clients connect to a real one.
+        """
         config = ServerConfig.from_env({})
 
         assert config.transport == "http"
-        assert config.host == "127.0.0.1"
+        assert config.host == "0.0.0.0"
         assert config.port == 8765
 
     def test_environment_overrides_transport_and_bind_address(self) -> None:
@@ -68,13 +72,13 @@ class TestServerConfig:
         config = ServerConfig.from_env(
             {
                 "GOMOKU_TRANSPORT": "STDIO",
-                "GOMOKU_HOST": "0.0.0.0",
+                "GOMOKU_HOST": "192.0.2.10",
                 "GOMOKU_PORT": "9100",
             }
         )
 
         assert config.transport == "stdio"
-        assert config.host == "0.0.0.0"
+        assert config.host == "192.0.2.10"
         assert config.port == 9100
 
     def test_invalid_port_fails_at_startup_with_a_clear_message(self) -> None:

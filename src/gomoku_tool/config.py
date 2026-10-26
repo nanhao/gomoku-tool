@@ -41,9 +41,11 @@ class ServerConfig:
     # connects to a URL instead of spawning a child process. ``stdio`` stays
     # available for clients that only support spawned servers.
     DEFAULT_TRANSPORT: ClassVar[str] = "http"
-    # Loopback by default: the tools open a desktop window and the engine API
-    # has no authentication, so LAN exposure must be an explicit choice.
-    DEFAULT_HOST: ClassVar[str] = "127.0.0.1"
+    # Every interface by default so an MCP client on another host of the same
+    # network can connect; ``0.0.0.0`` is a bind address, not a connect
+    # address. Set ``GOMOKU_HOST=127.0.0.1`` for a loopback-only server (the
+    # tools open a desktop window and the engine API has no authentication).
+    DEFAULT_HOST: ClassVar[str] = "0.0.0.0"
     # 8000 belongs to gomoku-engine on the documented local setup.
     DEFAULT_PORT: ClassVar[int] = 8765
     SUPPORTED_TRANSPORTS: ClassVar[frozenset[str]] = frozenset(

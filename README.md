@@ -43,8 +43,8 @@ No game rule, no board state and no persistence is implemented here.
 ```
 
 - **LLM side** — an MCP-capable client (IDE agent, desktop chat app, ...) talks
-  to this server over streamable HTTP, at `http://127.0.0.1:8765/mcp` by
-  default.
+  to this server over streamable HTTP, at `http://127.0.0.1:8765/mcp` on the
+  same machine or `http://<host-ip>:8765/mcp` from another one.
 - **Human side** — plays their side of the same game in the gomoku-ui window
   that `start_game` opens.
 - **gomoku-tool** — a protocol adapter plus a convenience layer: engine REST
@@ -325,10 +325,12 @@ pip install -e ".[dev]"
 ## Running
 
 `gomoku-tool` is a long-running **HTTP** MCP service. Start it once in its own
-terminal and leave it running; an MCP client connects to
-`http://127.0.0.1:8765/mcp` with streamable HTTP. It binds loopback only unless
-`GOMOKU_HOST` says otherwise. (`GOMOKU_TRANSPORT=stdio` remains available for
-clients that can only spawn servers.)
+terminal and leave it running; an MCP client connects with streamable HTTP to
+`http://127.0.0.1:8765/mcp` on the same machine, or to
+`http://<host-ip>:8765/mcp` from another one. It binds every interface
+(`0.0.0.0`) unless `GOMOKU_HOST` narrows it; `0.0.0.0` is a bind address only,
+never use it as the URL in a client. (`GOMOKU_TRANSPORT=stdio` remains
+available for clients that can only spawn servers.)
 
 ### 1. Start the dependencies first
 
@@ -351,7 +353,7 @@ python -m gomoku_tool.main   # or, after installation: gomoku-tool
 ```
 
 Expected: the FastMCP banner, `Starting MCP server 'gomoku-tool' with transport
-'http' on http://127.0.0.1:8765/mcp`, and uvicorn's `Application startup
+'http' on http://0.0.0.0:8765/mcp`, and uvicorn's `Application startup
 complete`. Leave the terminal open; Ctrl+C stops the server. Engine, Redis and
 UI settings are read from the environment at startup:
 
@@ -401,7 +403,7 @@ transport, the tool registration and the engine connection in one shot.
 | `GOMOKU_UI_DIR` | `D:\projects\gomoku-ui` | Gomoku-ui checkout; the launcher derives the script and venv from it |
 | `GOMOKU_UI_PYTHON` | `<GOMOKU_UI_DIR>\.venv\Scripts\python.exe` | Interpreter used to launch the gomoku-ui window |
 | `GOMOKU_TRANSPORT` | `http` | Transport: `http`/`streamable-http`, `sse` or `stdio` |
-| `GOMOKU_HOST` | `127.0.0.1` | Bind interface for HTTP transports; `0.0.0.0` exposes it on the LAN |
+| `GOMOKU_HOST` | `0.0.0.0` | Bind interface for HTTP transports; `0.0.0.0` accepts connections on every interface, `127.0.0.1` keeps it loopback-only |
 | `GOMOKU_PORT` | `8765` | Bind port; `8000` belongs to gomoku-engine |
 
 ## Directory Layout
@@ -470,7 +472,7 @@ gomoku-tool/
 - [x] Tasks wiring: `TasksExtension()`, optional `TaskConfig` on the waiting
       tools, progress status messages, poll interval
 - [x] MCP tool registration in `main.py`
-- [x] Streamable HTTP transport on `127.0.0.1:8765` by default; stdio opt-in
+- [x] Streamable HTTP transport on `0.0.0.0:8765` by default; stdio opt-in
       through `GOMOKU_TRANSPORT`
 - [x] Business-layer test suite with in-memory fakes (68 tests)
 - [ ] Manual end-to-end play with a real human in the real gomoku-ui window

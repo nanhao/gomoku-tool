@@ -13,8 +13,10 @@ LLM's turn again) are task-augmented through the MCP Tasks extension
 ``fastmcp-tasks`` package: :class:`TasksExtension` is registered here and the
 waiting tools are declared with an optional ``TaskConfig``.
 
-The server is a long-running HTTP service: it serves streamable HTTP on
-``http://127.0.0.1:8765/mcp`` by default, and clients connect to that URL.
+The server is a long-running HTTP service: it serves streamable HTTP on port
+8765 bound to every interface (``0.0.0.0``) by default, so clients connect to
+``http://127.0.0.1:8765/mcp`` on the same machine or to the host's network
+address from another one. ``GOMOKU_HOST`` narrows the bind address.
 ``GOMOKU_TRANSPORT=stdio`` switches to the spawned-child model for clients
 that only speak stdio.
 
